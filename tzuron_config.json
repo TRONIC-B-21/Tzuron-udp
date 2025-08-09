@@ -1,0 +1,12 @@
+{
+  "listen": ":5921",
+  "cert": "/etc/tzuron/tzuron.crt",
+  "key": "/etc/tzuron/tzuron.key",
+  "obfs": "tzuron",
+  "auth": {
+    "mode": "passwords",
+    "config": ["tz"]
+  }
+}
+
+
