@@ -3,21 +3,23 @@
 
 set -euo pipefail
 
-echo "Updating server"
+echo "Updating server..."
 sudo apt-get update && sudo apt-get upgrade -y
 
+# Stop service if running
 systemctl stop tzuron.service 1>/dev/null 2>/dev/null || true
 
 echo "Downloading UDP Service (amd64)"
 BINARY_URL="${TZURON_BINARY_URL:-https://github.com/TRONIC-B-21/Tzuron-udp/releases/latest/download/tzuron-linux-amd64}"
 if command -v curl >/dev/null 2>&1; then
-  curl -fL "$BINARY_URL" -o /usr/local/bin/tzuron
+  curl -fsSL "$BINARY_URL" -o /usr/local/bin/tzuron
 else
   wget -q "$BINARY_URL" -O /usr/local/bin/tzuron
 fi
 chmod +x /usr/local/bin/tzuron
 
-mkdir -p /etc/tzuron 1>/dev/null 2>/dev/null
+# Ensure config directory exists
+mkdir -p /etc/tzuron
 
 # Create default config if absent
 if [ ! -f /etc/tzuron/config.json ]; then
@@ -35,17 +37,19 @@ if [ ! -f /etc/tzuron/config.json ]; then
 JSON
 fi
 
-echo "Generating cert files:"
+echo "Generating cert files..."
 openssl req -new -newkey rsa:4096 -days 365 -nodes -x509 \
-  -subj "/C=US/ST=California/L=Los Angeles/O=Example Corp/OU=IT Department/CN=tzuron" \
+  -subj "/C=TZ/ST=Dar es Salaam/L=Dar es Salaam/O=Tzuron Corp/OU=VPN/CN=tzuron" \
   -keyout "/etc/tzuron/tzuron.key" -out "/etc/tzuron/tzuron.crt"
 
-sysctl -w net.core.rmem_max=16777216 1>/dev/null 2>/dev/null || true
-sysctl -w net.core.wmem_max=16777216 1>/dev/null 2>/dev/null || true
+# Optimize buffers (like Zivpn does)
+sysctl -w net.core.rmem_max=16777216 >/dev/null 2>&1 || true
+sysctl -w net.core.wmem_max=16777216 >/dev/null 2>&1 || true
 
+# Create systemd service
 cat > /etc/systemd/system/tzuron.service <<'EOF'
 [Unit]
-Description=tzuron VPN Server
+Description=Tzuron UDP VPN Server
 After=network.target
 
 [Service]
@@ -64,11 +68,12 @@ NoNewPrivileges=true
 WantedBy=multi-user.target
 EOF
 
-echo "TZURON UDP Passwords"
+# Password setup
+echo "Tzuron UDP Passwords"
 if [ -n "${TZURON_PASSWORDS:-}" ]; then
   input_config="$TZURON_PASSWORDS"
 else
-  read -r -p "Enter passwords separated by commas, example: pass1,pass2 (Press enter for Default 'tz'): " input_config
+  read -r -p "Enter passwords separated by commas (default 'tz'): " input_config
 fi
 
 if [ -n "$input_config" ]; then
@@ -81,23 +86,23 @@ else
 fi
 
 new_config_str="\"config\": [$(printf "\"%s\"," "${config[@]}" | sed 's/,$//')]"
-# Replace any existing config array
 sed -i -E "s/\"config\":\\s*\\[[^\\]]*\\]/${new_config_str}/g" /etc/tzuron/config.json
 
+# Enable service
 systemctl daemon-reload
 systemctl enable tzuron.service
-systemctl start tzuron.service
+systemctl restart tzuron.service
 
-# Add DNAT rule only if missing
+# Add DNAT rules
 IFACE="$(ip -4 route ls | awk '/default/ {print $5; exit}')"
 if ! iptables -t nat -C PREROUTING -i "$IFACE" -p udp --dport 6000:19999 -j DNAT --to-destination :5921 2>/dev/null; then
   iptables -t nat -A PREROUTING -i "$IFACE" -p udp --dport 6000:19999 -j DNAT --to-destination :5921
 fi
 
-# UFW if available
+# UFW rules (if installed)
 if command -v ufw >/dev/null 2>&1; then
   ufw allow 6000:19999/udp || true
   ufw allow 5921/udp || true
 fi
 
-echo "TZURON UDP Installed"
+echo "✅ Tzuron UDP Installed & Running"
